@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="description" content="Klondike Solitaire — the classic patience card game. Draw-1 / draw-3 modes, unlimited undo, smart hints and the winning cascade. Free single-file HTML5 game.">
+<title>Solitaire · Classic Klondike Card Game</title>
+<script>
+// 平台 SDK 按域名条件加载（独立运行时完全不加载，游戏行为不变）
+(function () {
+  var host = location.hostname || "";
+  try {
+    if (host.indexOf("crazygames") !== -1) {
+      var s1 = document.createElement("script");
+      s1.src = "https://sdk.crazygames.com/crazygames-sdk-v3.js";
+      s1.onload = function () {
+        if (window.CrazyGames && window.CrazyGames.SDK) {
+          window.CrazyGames.SDK.init().then(function () {
+            try { window.CrazyGames.SDK.game.loadingStart(); } catch (e) {}
+            window.addEventListener("load", function () { try { window.CrazyGames.SDK.game.loadingStop(); } catch (e) {} });
+          }).catch(function () {});
+        }
+      };
+      document.head.appendChild(s1);
+      window.__portal = "crazygames";
+    } else if (host.indexOf("gamedistribution") !== -1 || host.indexOf("html5.gamedistribution.com") !== -1 || host.indexOf("gd.games") !== -1) {
+      var s2 = document.createElement("script");
+      s2.src = "https://sdk.gamedistribution.com/v2/main.min.js";
+      document.head.appendChild(s2);
+      window.__portal = "gamedistribution";
+    }
+  } catch (e) {}
+})();
+</script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#0c2417; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  #wrap { height:100%; display:flex; flex-direction:column; }
+  #hud { display:flex; align-items:center; gap:10px; padding:6px 10px; background:#0a1c11; color:#eaf5ec; box-shadow:0 1px 0 rgba(120,200,140,.15); z-index:6; flex-wrap:wrap; }
+  .stat { text-align:center; min-width:54px; }
+  .stat .label { font-size:10px; color:#7fae8d; letter-spacing:1px; }
+  .stat .val { font-size:18px; font-weight:800; font-variant-numeric:tabular-nums; }
+  #btns { margin-left:auto; display:flex; gap:6px; }
+  #btns button { background:#173725; color:#d9efe0; border:1px solid #2c5c3f; border-radius:9px; padding:7px 11px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  #btns button:active { transform:scale(.96); }
+  #btns button:disabled { opacity:.38; }
+  #stage { flex:1; position:relative; overflow:hidden; }
+  canvas { display:block; position:absolute; inset:0; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  #overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(5,18,10,.78); z-index:5; }
+  #panel { background:#0f2a1b; border:1px solid #2c5c3f; border-radius:18px; padding:24px 32px; text-align:center; color:#fff; max-width:88%; }
+  #panel h2 { font-size:24px; margin-bottom:6px; color:#ffe9a8; }
+  #panel p { color:#a9cfb6; font-size:13px; margin-bottom:10px; line-height:1.55; }
+  #panel .rec { font-size:12px; color:#8fc7a3; margin-bottom:14px; line-height:1.7; }
+  #panel .final { font-size:32px; font-weight:900; color:#ffe9a8; margin-bottom:8px; }
+  #panel .btnrow { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  #panel button { background:linear-gradient(135deg,#2f9e63,#1d7a48); color:#fff; border:none; border-radius:12px; padding:12px 26px; font-size:15px; font-weight:800; cursor:pointer; font-family:inherit; }
+  #panel button.alt { background:#173725; border:1px solid #2c5c3f; font-weight:700; }
+  #panel button:active { transform:scale(.97); }
+  #footer { color:#6fa483; font-size:11px; padding:5px; text-align:center; background:#0a1c11; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div class="stat"><div class="label">SCORE</div><div class="val" id="score">0</div></div>
+    <div class="stat"><div class="label">TIME</div><div class="val" id="time">0:00</div></div>
+    <div class="stat"><div class="label">MOVES</div><div class="val" id="moves">0</div></div>
+    <div id="btns">
+      <button id="undoBtn">Undo</button>
+      <button id="hintBtn">Hint</button>
+      <button id="muteBtn">Sound On</button>
+      <button id="newBtn">New</button>
+    </div>
+  </div>
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="overlay"><div id="panel">
+      <h2 id="ovTitle">Solitaire</h2>
+      <p id="ovText"></p>
+      <div class="final" id="ovFinal" style="display:none"></div>
+      <div class="rec" id="ovRec"></div>
+      <div class="btnrow" id="ovBtns"></div>
+    </div></div>
+  </div>
+  <div id="footer">Klondike Solitaire — a free classic card game</div>
+</div>
+<script>
+"use strict";
+/*==LOGIC-START==*/
+// 纯规则引擎（无 DOM 依赖，Node 单测可直接抽取本段）
+var SUIT_TXT = ["S", "H", "D", "C"];            // 黑桃/红心/方块/梅花
+var IS_RED = [false, true, true, false];        // 0黑 1红 2红 3黑
+var RANK_TXT = ["", "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+
+function mulberry32(seed) {
+  var t = seed >>> 0;
+  return function () {
+    t = (t + 0x6D2B79F5) >>> 0;
+    var r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function newDeck() {
+  var d = [];
+  for (var s = 0; s < 4; s++) for (var r = 1; r <= 13; r++) d.push({ s: s, r: r, up: false, id: s * 13 + r - 1 });
+  return d;
+}
+
+function shuffle(a, rng) {
+  for (var i = a.length - 1; i > 0; i--) {
+    var j = Math.floor(rng() * (i + 1));
+    var t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
+// 发一局：mode=1 或 3（每次翻牌张数）
+function deal(mode, rng) {
+  var deck = shuffle(newDeck(), rng || Math.random);
+  var G = {
+    mode: mode,
+    stock: [], waste: [], found: [[], [], [], []], tab: [[], [], [], [], [], [], []],
+    score: 0, moves: 0, elapsed: 0, pen: 0
+  };
+  var k = 0;
+  for (var c = 0; c < 7; c++) {
+    for (var i = 0; i <= c; i++) {
+      var card = deck[k++];
+      card.up = (i === c);              // 每列顶牌翻开
+      G.tab[c].push(card);
+    }
+  }
+  for (; k < 52; k++) G.stock.push(deck[k]);   // 剩 24 张进牌堆，数组末尾为堆顶
+  return G;
+}
+
+function isRed(c) { return IS_RED[c.s]; }
+function topCard(p) { return p && p.length ? p[p.length - 1] : null; }
+
+// tableau 落牌：空列只收 K；否则红黑交替、点数恰小 1
+function canTabDrop(card, pile) {
+  var t = topCard(pile);
+  if (!t) return card.r === 13;
+  return t.up && isRed(card) !== isRed(t) && card.r === t.r - 1;
+}
+
+// foundation 落牌：A 垫底，同花色递增
+function canFoundDrop(card, found) {
+  if (!found.length) return card.r === 1;
+  var t = topCard(found);
+  return t.s === card.s && card.r === t.r + 1;
+}
+
+// 取从 j 开始的可移动序列；waste/foundation 只能取顶张
+function getRun(G, k, fi, j) {
+  if (k === "t") {
+    var p = G.tab[fi];
+    if (!p || j < 0 || j >= p.length || !p[j].up) return null;
+    return p.slice(j);
+  }
+  if (k === "w") {
+    var w = G.waste;
+    return (w.length && j === w.length - 1) ? [w[w.length - 1]] : null;
+  }
+  if (k === "f") {
+    var f = G.found[fi];
+    return (f && f.length && j === f.length - 1) ? [topCard(f)] : null;
+  }
+  return null;
+}
+
+// mv = {f:'w'|'t'|'f', fi, n, t:'t'|'f', ti}
+function canMove(G, mv) {
+  var src = mv.f === "t" ? G.tab[mv.fi] : mv.f === "w" ? G.waste : (mv.f === "f" ? G.found[mv.fi] : null);
+  if (!src) return false;
+  if (mv.n < 1 || mv.n > src.length) return false;
+  if (mv.f !== "t" && mv.n !== 1) return false;          // waste/foundation 只可单张
+  if (mv.f === mv.t && mv.fi === mv.ti) return false;    // 同堆
+  if (mv.f === "f" && mv.t === "f") return false;        // foundation 间互移无意义
+  var lead = src[src.length - mv.n];
+  if (mv.f === "t" && !lead.up) return false;            // 不能拖未翻开牌
+  if (mv.t === "t") {
+    if (mv.ti < 0 || mv.ti > 6) return false;
+    return canTabDrop(lead, G.tab[mv.ti]);
+  }
+  if (mv.t === "f") {
+    if (mv.ti < 0 || mv.ti > 3) return false;
+    return canFoundDrop(lead, G.found[mv.ti]);
+  }
+  return false;
+}
+
+// 执行移动（已假定 canMove 通过），返回 {flipped, cards}
+// 计分：w→t +5；→foundation +10；翻 tableau 牌 +5；f→t −15（下限 0）
+function applyMove(G, mv) {
+  var src = mv.f === "t" ? G.tab[mv.fi] : mv.f === "w" ? G.waste : G.found[mv.fi];
+  var cards = src.splice(src.length - mv.n, mv.n);
+  var dst = mv.t === "t" ? G.tab[mv.ti] : G.found[mv.ti];
+  for (var i = 0; i < cards.length; i++) dst.push(cards[i]);
+  var info = { flipped: false, cards: cards };
+  if (mv.t === "f") G.score += 10;
+  else if (mv.f === "w") G.score += 5;
+  else if (mv.f === "f") G.score = Math.max(0, G.score - 15);
+  if (mv.f === "t") {
+    var t = topCard(G.tab[mv.fi]);
+    if (t && !t.up) { t.up = true; G.score += 5; info.flipped = true; }
+  }
+  G.moves++;
+  return info;
+}
+
+// 抽牌：返回 1=翻牌 2=回收 waste 0=无牌可动
+function doDraw(G) {
+  if (!G.stock.length) {
+    if (!G.waste.length) return 0;
+    G.stock = G.waste.slice().reverse();   // 回收后下一次先抽到原 waste 底张
+    G.waste = [];
+    G.score = Math.max(0, G.score - 20);   // 循环扣 20，下限 0
+    G.moves++;
+    return 2;
+  }
+  var n = Math.min(G.mode === 3 ? 3 : 1, G.stock.length);
+  for (var i = 0; i < n; i++) {
+    var c = G.stock.pop();
+    c.up = true;
+    G.waste.push(c);
+  }
+  G.moves++;
+  return 1;
+}
+
+function checkWin(G) {
+  for (var i = 0; i < 4; i++) if (G.found[i].length !== 13) return false;
+  return true;
+}
+
+// 提示/卡死检测用可行步集合（includeFT=true 时把 f→t 也算作活步）
+function findMoves(G, includeFT) {
+  var out = [], i, j, k, fi, lead;
+  for (fi = 0; fi < 4; fi++) {
+    for (i = 0; i < 7; i++) {
+      var tp = topCard(G.tab[i]);
+      if (tp && canFoundDrop(tp, G.found[fi])) out.push({ f: "t", fi: i, n: 1, t: "f", ti: fi });
+    }
+    var wp = topCard(G.waste);
+    if (wp && canFoundDrop(wp, G.found[fi])) out.push({ f: "w", fi: 0, n: 1, t: "f", ti: fi });
+  }
+  for (i = 0; i < 7; i++) {
+    var p = G.tab[i];
+    for (j = 0; j < p.length; j++) {
+      if (!p[j].up) continue;
+      lead = p[j];
+      for (k = 0; k < 7; k++) {
+        if (k === i) continue;
+        if (!G.tab[k].length && j === 0) continue;   // 整条 K 序列挪到另一空列 = 无效步
+        if (canTabDrop(lead, G.tab[k])) out.push({ f: "t", fi: i, n: p.length - j, t: "t", ti: k });
+      }
+      break;   // 只看最大序列的头
+    }
+  }
+  var wt = topCard(G.waste);
+  if (wt) for (k = 0; k < 7; k++) if (canTabDrop(wt, G.tab[k])) out.push({ f: "w", fi: 0, n: 1, t: "t", ti: k });
+  if (includeFT) {
+    for (fi = 0; fi < 4; fi++) {
+      var ft = topCard(G.found[fi]);
+      if (ft) for (k = 0; k < 7; k++) if (canTabDrop(ft, G.tab[k])) out.push({ f: "f", fi: fi, n: 1, t: "t", ti: k });
+    }
+  }
+  return out;
+}
+
+function foundRank(G, fi) { var t = topCard(G.found[fi]); return t ? t.r : 0; }
+
+// "安全自动上 foundation" 判定：A/2 恒安全；否则按各堆顶牌实际花色分色，
+// 对色两堆最小 rank ≥ r−1，或 ≥ r−2 且 同色两堆最小 rank ≥ r−2；空堆按 0 计
+function isSafeAuto(G, card) {
+  if (card.r <= 2) return true;
+  var oppMin = 99, sameMin = 99, i, t;
+  for (i = 0; i < 4; i++) {
+    t = topCard(G.found[i]);
+    if (!t) { oppMin = 0; sameMin = 0; continue; }
+    if (IS_RED[t.s] !== isRed(card)) oppMin = Math.min(oppMin, t.r);
+    else sameMin = Math.min(sameMin, t.r);
+  }
+  return oppMin >= card.r - 1 || (oppMin >= card.r - 2 && sameMin >= card.r - 2);
+}
+
+// 找一张"安全"的牌自动飞上 foundation（优先点数最小），无则 null
+function autoFlyOne(G) {
+  var best = null, bestR = 99, fi, i, c;
+  for (fi = 0; fi < 4; fi++) {
+    for (i = 0; i < 7; i++) {
+      c = topCard(G.tab[i]);
+      if (c && c.r < bestR && canFoundDrop(c, G.found[fi]) && isSafeAuto(G, c)) {
+        best = { f: "t", fi: i, n: 1, t: "f", ti: fi }; bestR = c.r;
+      }
+    }
+    c = topCard(G.waste);
+    if (c && c.r < bestR && canFoundDrop(c, G.found[fi]) && isSafeAuto(G, c)) {
+      best = { f: "w", fi: 0, n: 1, t: "f", ti: fi }; bestR = c.r;
+    }
+  }
+  return best;
+}
+
+// 终局强制收牌：任意可上 foundation 的顶牌
+function anyFoundMove(G) {
+  for (var fi = 0; fi < 4; fi++) {
+    for (var i = 0; i < 7; i++) {
+      var c = topCard(G.tab[i]);
+      if (c && canFoundDrop(c, G.found[fi])) return { f: "t", fi: i, n: 1, t: "f", ti: fi };
+    }
+    var w = topCard(G.waste);
+    if (w && canFoundDrop(w, G.found[fi])) return { f: "w", fi: 0, n: 1, t: "f", ti: fi };
+  }
+  return null;
+}
+
+// 终局判定：stock/waste 空 且 tableau 全部翻开
+function autoCompleteReady(G) {
+  if (G.stock.length || G.waste.length) return false;
+  for (var i = 0; i < 7; i++) for (var j = 0; j < G.tab[i].length; j++) if (!G.tab[i][j].up) return false;
+  return true;
+}
+
+// 计时惩罚：每满 10 秒 −2，下限 0
+function tickTime(G, dt) {
+  G.elapsed += dt;
+  var p = Math.floor(G.elapsed / 10);
+  if (p > G.pen) { G.score = Math.max(0, G.score - 2 * (p - G.pen)); G.pen = p; }
+}
+
+// 卡死判定：无任何活步，且把 stock+waste 整轮模拟翻完仍无可上之牌
+function isStuck(G) {
+  if (findMoves(G, true).length) return false;
+  if (!G.stock.length && !G.waste.length) return true;
+  var order = G.stock.slice().reverse().concat(G.waste);   // 下一轮翻牌可见顺序
+  var step = G.mode === 3 ? 3 : 1;                          // 翻 3 模式只看每组顶张
+  for (var i = step - 1; i < order.length; i += step) {
+    var c = order[i], fi, k;
+    for (fi = 0; fi < 4; fi++) if (canFoundDrop(c, G.found[fi])) return false;
+    for (k = 0; k < 7; k++) if (canTabDrop(c, G.tab[k])) return false;
+  }
+  return true;
+}
+
+function stripUnders(k, v) { return k.charAt(0) === "_" ? undefined : v; }
+function cloneG(G) { return JSON.parse(JSON.stringify(G, stripUnders)); }
+/*==LOGIC-END==*/
+
+// ---------- 画布与度量 ----------
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var stage = document.getElementById("stage");
+var W = 800, H = 600, dpr = 1;
+var M = {};
+function resize() {
+  var box = stage.getBoundingClientRect();
+  W = Math.max(300, Math.floor(box.width));
+  H = Math.max(320, Math.floor(box.height));
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var pad = Math.max(6, Math.min(18, W * 0.015));
+  var gap = Math.max(4, Math.min(14, W * 0.014));
+  var cwW = (W - pad * 2 - gap * 6) / 7;
+  var cwH = (H - pad * 2 - Math.max(10, H * 0.02)) / (1.42 * 3.35);   // 顶行 + 首张 + 约 4 张展开
+  var cw = Math.min(cwW, cwH / 1.42, 120);
+  M.pad = pad; M.gap = gap; M.cw = cw; M.ch = cw * 1.42;
+  M.topY = pad;
+  M.tabY = M.topY + M.ch + Math.max(10, M.ch * 0.16);
+  M.uOff = M.ch * 0.30; M.dOff = M.ch * 0.15;
+}
+function colX(i) { return M.pad + i * (M.cw + M.gap); }
+window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", function () { setTimeout(resize, 120); });
+
+// ---------- 全局状态 ----------
+var G = null;              // 规则引擎状态（纯数据）
+var state = "MENU";        // MENU | PLAY | WIN | STUCK
+var LM = {};               // 本帧 id→坐标
+var anims = [];            // 飞行动画 {card,x0,y0,x1,y1,t,dur}
+var flips = [];            // 翻牌动画中的卡
+var undoStack = [];
+var hintsLeft = 3;
+var hintBoxes = null, hintUntil = 0;
+var sel = null;            // 点选 {k,fi,j}
+var drag = null;
+var pendingTap = null;
+var lastTap = { t: 0, k: null, i: -2, j: -2 };
+var autoPending = false, autoNext = 0;
+var stuckAt = 0, winAt = 0;
+var roundStarted = false;
+var wf = null, wfActive = false;
+var msgText = "", msgUntil = 0;
+var lastT = 0;
+
+// 最高分/最快时间/胜场（localStorage 全部 try/catch）
+var S = { bs1: 0, bt1: 0, bs3: 0, bt3: 0, wins: 0, games: 0 };
+function loadStats() {
+  try {
+    var o = JSON.parse(localStorage.getItem("sk_stats") || "{}");
+    if (o && typeof o === "object") {
+      S.bs1 = o.bs1 | 0; S.bt1 = o.bt1 | 0; S.bs3 = o.bs3 | 0; S.bt3 = o.bt3 | 0;
+      S.wins = o.wins | 0; S.games = o.games | 0;
+    }
+  } catch (e) {}
+}
+function saveStats() { try { localStorage.setItem("sk_stats", JSON.stringify(S)); } catch (e) {} }
+loadStats();
+
+var muted = false;
+try { muted = localStorage.getItem("sk_mute") === "1"; } catch (e) {}
+
+// ---------- 音效（WebAudio 合成） ----------
+var actx = null;
+function ensureAudio() {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+  } catch (e) {}
+}
+function tone(freq, dur, type, gainv, when, slideTo) {
+  try {
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || "sine";
+    o.frequency.setValueAtTime(freq, when);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, when + dur);
+    g.gain.setValueAtTime(gainv || 0.08, when);
+    g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(when); o.stop(when + dur + 0.02);
+  } catch (e) {}
+}
+function snd(name) {
+  if (muted) return;
+  ensureAudio();
+  if (!actx) return;
+  var t0 = actx.currentTime, i;
+  if (name === "draw") tone(520, 0.05, "triangle", 0.05, t0);
+  else if (name === "move") { tone(300, 0.05, "sine", 0.07, t0); tone(430, 0.06, "sine", 0.05, t0 + 0.035); }
+  else if (name === "flip") tone(480, 0.09, "triangle", 0.05, t0, 900);
+  else if (name === "found") { tone(660, 0.09, "sine", 0.08, t0); tone(990, 0.16, "sine", 0.07, t0 + 0.07); }
+  else if (name === "error") tone(140, 0.16, "sawtooth", 0.055, t0);
+  else if (name === "undo") tone(640, 0.1, "sine", 0.05, t0, 320);
+  else if (name === "deal") tone(380, 0.04, "triangle", 0.045, t0);
+  else if (name === "win") {
+    var seq = [523, 659, 784, 1047, 1319, 1568];
+    for (i = 0; i < seq.length; i++) tone(seq[i], 0.16, "sine", 0.09, t0 + i * 0.1);
+    tone(2093, 0.5, "sine", 0.06, t0 + seq.length * 0.1);
+  }
+}
+
+// ---------- 平台事件（域名守卫由 loader 完成） ----------
+function portalStart() { try { if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) window.CrazyGames.SDK.game.gameplayStart(); } catch (e) {} }
+function portalStop() { try { if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) window.CrazyGames.SDK.game.gameplayStop(); } catch (e) {} }
+function portalHappy() { try { if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) window.CrazyGames.SDK.game.happytime(); } catch (e) {} }
+function roundStart() {
+  if (roundStarted) return;
+  roundStarted = true;
+  portalStart();
+}
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden) portalStop();
+  else if (state === "PLAY" && roundStarted) portalStart();
+});
+
+// ---------- 布局 ----------
+function layoutMap() {
+  var map = {}, i, j;
+  var n = G.mode === 3 ? Math.min(3, G.waste.length) : Math.min(1, G.waste.length);
+  var start = G.waste.length - n;
+  for (i = 0; i < G.waste.length; i++) {
+    var vi = Math.max(0, i - start);
+    map[G.waste[i].id] = { x: colX(1) + vi * M.cw * 0.32, y: M.topY };
+  }
+  for (i = 0; i < 4; i++) {
+    var f = G.found[i];
+    for (j = 0; j < f.length; j++) map[f[j].id] = { x: colX(3 + i), y: M.topY };
+  }
+  for (i = 0; i < G.stock.length; i++) map[G.stock[i].id] = { x: colX(0), y: M.topY };
+  var avail = H - M.pad - M.tabY - M.ch;
+  for (i = 0; i < 7; i++) {
+    var p = G.tab[i], offs = [], need = 0;
+    for (j = 0; j < p.length - 1; j++) { var o = p[j].up ? M.uOff : M.dOff; offs.push(o); need += o; }
+    var sc = need > avail && need > 0 ? avail / need : 1;
+    if (sc < 0.3) sc = 0.3;
+    var y = M.tabY;
+    for (j = 0; j < p.length; j++) {
+      map[p[j].id] = { x: colX(i), y: y, sc: sc };
+      if (j < offs.length) y += offs[j] * sc;
+    }
+  }
+  return map;
+}
+
+// ---------- 卡牌绘制 ----------
+function rrect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+var FONT = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+function drawSuit(s, x, y, sz, col) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  if (s === 2) {           // 方块
+    ctx.moveTo(0, -sz); ctx.lineTo(sz * 0.74, 0); ctx.lineTo(0, sz); ctx.lineTo(-sz * 0.74, 0); ctx.closePath();
+  } else if (s === 1) {    // 红心：双圆 + 三角
+    ctx.moveTo(sz * 0.04, -sz * 0.30);
+    ctx.arc(-sz * 0.52, -sz * 0.30, sz * 0.56, 0, 6.2832);
+    ctx.moveTo(sz * 1.08, -sz * 0.30);
+    ctx.arc(sz * 0.52, -sz * 0.30, sz * 0.56, 0, 6.2832);
+    ctx.moveTo(-sz * 1.04, -sz * 0.12);
+    ctx.lineTo(sz * 1.04, -sz * 0.12); ctx.lineTo(0, sz * 0.98); ctx.closePath();
+  } else if (s === 0) {    // 黑桃：倒心 + 茎
+    ctx.moveTo(-sz * 1.0, sz * 0.18);
+    ctx.lineTo(sz * 1.0, sz * 0.18); ctx.lineTo(0, -sz * 0.98); ctx.closePath();
+    ctx.moveTo(sz * 1.08, sz * 0.30);
+    ctx.arc(sz * 0.52, sz * 0.30, sz * 0.56, 0, 6.2832);
+    ctx.moveTo(sz * 0.04, sz * 0.30);
+    ctx.arc(-sz * 0.52, sz * 0.30, sz * 0.56, 0, 6.2832);
+  } else {                 // 梅花：三圆 + 茎
+    ctx.moveTo(sz * 0.5, -sz * 0.42);
+    ctx.arc(0, -sz * 0.42, sz * 0.5, 0, 6.2832);
+    ctx.moveTo(sz * 0.96, sz * 0.2);
+    ctx.arc(sz * 0.46, sz * 0.2, sz * 0.5, 0, 6.2832);
+    ctx.moveTo(sz * 0.04, sz * 0.2);
+    ctx.arc(-sz * 0.46, sz * 0.2, sz * 0.5, 0, 6.2832);
+  }
+  ctx.fill();
+  if (s === 0 || s === 3) {
+    var st = s === 0 ? sz : sz * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(-st * 0.34, st * 0.95);
+    ctx.quadraticCurveTo(-st * 0.06, st * 0.42, 0, st * 0.12);
+    ctx.quadraticCurveTo(st * 0.06, st * 0.42, st * 0.34, st * 0.95);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawFace(x, y, card, w, h) {
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,.32)"; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+  rrect(ctx, x, y, w, h, w * 0.09);
+  ctx.fillStyle = "#fdfcf5"; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = "rgba(50,55,65,.35)"; ctx.lineWidth = 1; ctx.stroke();
+  var col = isRed(card) ? "#c22f3e" : "#20242c";
+  var rt = RANK_TXT[card.r];
+  var fs = Math.round(w * (rt.length > 1 ? 0.26 : 0.30));
+  var ssz = w * 0.115;
+  function corner(tx, ty, rot) {
+    ctx.save();
+    ctx.translate(tx, ty); ctx.rotate(rot);
+    ctx.fillStyle = col;
+    ctx.font = "700 " + fs + "px " + FONT;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(rt, 0, 0);
+    drawSuit(card.s, 0, fs * 0.95, ssz, col);
+    ctx.restore();
+  }
+  corner(x + w * 0.18, y + h * 0.12, 0);
+  corner(x + w * 0.82, y + h * 0.88, Math.PI);
+  ctx.fillStyle = col;
+  if (card.r >= 11) {
+    ctx.font = "800 " + Math.round(w * 0.5) + "px " + FONT;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(rt, x + w / 2, y + h * 0.44);
+    drawSuit(card.s, x + w / 2, y + h * 0.72, w * 0.14, col);
+  } else {
+    drawSuit(card.s, x + w / 2, y + h * 0.52, card.r === 1 ? w * 0.34 : w * 0.27, col);
+  }
+  ctx.restore();
+}
+function drawBack(x, y, w, h) {
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,.32)"; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+  rrect(ctx, x, y, w, h, w * 0.09);
+  ctx.fillStyle = "#8e2f3c"; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.save();
+  rrect(ctx, x, y, w, h, w * 0.09); ctx.clip();
+  ctx.strokeStyle = "rgba(255,255,255,.20)"; ctx.lineWidth = 1;
+  var step = Math.max(5, w * 0.15);
+  for (var d = -h; d < w + h; d += step) {
+    ctx.beginPath(); ctx.moveTo(x + d, y); ctx.lineTo(x + d + h, y + h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + d, y + h); ctx.lineTo(x + d + h, y); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = "rgba(255,255,255,.6)"; ctx.lineWidth = Math.max(1.5, w * 0.045);
+  rrect(ctx, x + w * 0.09, y + h * 0.045, w * 0.82, h * 0.91, w * 0.07); ctx.stroke();
+  ctx.restore();
+}
+function drawCard(x, y, card, w, h) {
+  var f = card._flip || 0;
+  if (f > 0) {
+    var sx = Math.abs(Math.cos(Math.PI * f));
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.scale(Math.max(0.04, sx), 1);
+    if (f < 0.5) drawFace(-w / 2, -h / 2, card, w, h); else drawBack(-w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else if (card.up) drawFace(x, y, card, w, h);
+  else drawBack(x, y, w, h);
+}
+function drawSlot(x, y, label) {
+  rrect(ctx, x, y, M.cw, M.ch, M.cw * 0.09);
+  ctx.strokeStyle = "rgba(255,255,255,.26)"; ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+  if (label) {
+    ctx.fillStyle = "rgba(255,255,255,.18)";
+    ctx.font = "800 " + Math.round(M.cw * 0.48) + "px " + FONT;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, x + M.cw / 2, y + M.ch / 2);
+  }
+}
+function drawRecycle(x, y) {
+  var cx = x + M.cw / 2, cy = y + M.ch / 2, r = M.cw * 0.26;
+  ctx.strokeStyle = "rgba(255,255,255,.4)"; ctx.lineWidth = Math.max(2, M.cw * 0.06);
+  ctx.beginPath(); ctx.arc(cx, cy, r, -0.35 * Math.PI, 1.15 * Math.PI); ctx.stroke();
+  var ax = cx + r * Math.cos(1.15 * Math.PI), ay = cy + r * Math.sin(1.15 * Math.PI);
+  ctx.fillStyle = "rgba(255,255,255,.4)";
+  ctx.beginPath();
+  ctx.moveTo(ax + r * 0.18, ay - r * 0.1);
+  ctx.lineTo(ax - r * 0.5, ay - r * 0.28);
+  ctx.lineTo(ax - r * 0.1, ay + r * 0.42);
+  ctx.closePath(); ctx.fill();
+}
+function drawCount(x, y, n) {
+  var r = Math.max(9, M.cw * 0.16);
+  var cx = x + M.cw - r * 0.4, cy = y + M.ch - r * 0.4;
+  ctx.fillStyle = "rgba(8,22,13,.85)";
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.2832); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "700 " + Math.round(r * 1.15) + "px " + FONT;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(String(n), cx, cy + 0.5);
+}
+
+// ---------- 动画 ----------
+var animSet = {};
+function rebuildAnimSet() {
+  animSet = {};
+  for (var i = 0; i < anims.length; i++) animSet[anims[i].card.id] = true;
+}
+function stepAnims(dt) {
+  var i;
+  for (i = flips.length - 1; i >= 0; i--) {
+    var c = flips[i];
+    if (c._flipDelay > 0) { c._flipDelay -= dt; continue; }
+    c._flip = Math.max(0, c._flip - dt * 4.2);
+    if (c._flip <= 0) flips.splice(i, 1);
+  }
+  for (i = anims.length - 1; i >= 0; i--) {
+    var a = anims[i];
+    a.t += dt;
+    if (a.t >= 0 && a.card._hide) delete a.card._hide;
+    if (a.t >= a.dur) anims.splice(i, 1);
+  }
+  rebuildAnimSet();
+}
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+// ---------- 撤销 ----------
+function undoPush() {
+  undoStack.push(JSON.stringify(G, stripUnders));
+  if (undoStack.length > 500) undoStack.shift();
+}
+function doUndo() {
+  if (state !== "PLAY" && state !== "STUCK") return;
+  if (!undoStack.length) { snd("error"); return; }
+  G = JSON.parse(undoStack.pop());
+  anims = []; rebuildAnimSet();
+  flips = [];
+  sel = null; drag = null; pendingTap = null;
+  autoPending = false; stuckAt = 0; winAt = 0;
+  wf = null; wfActive = false;
+  if (state === "STUCK") hideOverlay();
+  state = "PLAY";
+  snd("undo");
+  updateHud();
+}
+
+// ---------- 行棋 ----------
+function beginUserMove(mv, dragPos, isAuto) {
+  if (!canMove(G, mv)) return false;
+  var srcArr = mv.f === "t" ? G.tab[mv.fi] : mv.f === "w" ? G.waste : G.found[mv.fi];
+  var cards = srcArr.slice(srcArr.length - mv.n);
+  var mapBefore = layoutMap();
+  undoPush();
+  var info = applyMove(G, mv);
+  snd(isAuto ? "found" : (info.flipped ? "flip" : "move"));
+  var mapAfter = layoutMap(), i;
+  for (i = 0; i < cards.length; i++) {
+    var a = mapBefore[cards[i].id] || { x: colX(0), y: M.topY };
+    var b = mapAfter[cards[i].id] || { x: colX(3), y: M.topY };
+    anims.push({
+      card: cards[i],
+      x0: dragPos ? dragPos[i].x : a.x, y0: dragPos ? dragPos[i].y : a.y,
+      x1: b.x, y1: b.y,
+      t: -i * 0.028, dur: 0.24
+    });
+  }
+  if (info.flipped) {
+    var ft = topCard(G.tab[mv.fi]);
+    ft._flip = 1; ft._flipDelay = 0.16;
+    flips.push(ft);
+  }
+  sel = null; pendingTap = null;
+  roundStart();
+  updateHud();
+  var now = performance.now();
+  if (checkWin(G)) { winAt = now + 450; autoPending = false; stuckAt = 0; }
+  else { autoPending = true; autoNext = now + 280; stuckAt = now + 900; }
+  return true;
+}
+function doDrawAction() {
+  if (state !== "PLAY") return;
+  var r = doDraw(G);
+  if (!r) { snd("error"); return; }
+  undoPush();
+  sel = null; pendingTap = null;
+  roundStart();
+  var now = performance.now();
+  if (r === 1) {
+    snd("draw");
+    var n = G.mode === 3 ? Math.min(3, G.waste.length) : 1;
+    var start = G.waste.length - n;
+    for (var i = start; i < G.waste.length; i++) {
+      anims.push({ card: G.waste[i], x0: colX(0), y0: M.topY, x1: colX(1) + (i - start) * M.cw * 0.32, y1: M.topY, t: -(i - start) * 0.04, dur: 0.18 });
+    }
+  } else {
+    snd("undo");
+    flashMsg("Stock recycled  −20");
+  }
+  stuckAt = now + 900;
+  updateHud();
+}
+function flashMsg(text) { msgText = text; msgUntil = performance.now() + 1500; }
+
+// ---------- 自动收牌 / 终局连收 ----------
+function autoCompleteReady2() { return autoCompleteReady(G); }
+function stepAuto(t) {
+  if (!autoPending || t < autoNext) return;
+  var m = autoFlyOne(G);
+  var fast = false;
+  if (!m && autoCompleteReady2()) { m = anyFoundMove(G); fast = true; }
+  if (m) {
+    beginUserMove(m, null, true);
+    autoNext = t + (fast ? 85 : 130);
+    return;
+  }
+  autoPending = false;
+  stuckAt = t + 700;
+}
+function checkStuckTimer(t) {
+  if (!stuckAt || t < stuckAt) return;
+  stuckAt = 0;
+  if (state === "PLAY" && !autoPending && !anims.length && !winAt && isStuck(G)) showStuck();
+}
+
+// ---------- 胜利瀑布 ----------
+function beginWin() {
+  state = "WIN";
+  sel = null; drag = null; pendingTap = null;
+  autoPending = false; stuckAt = 0; winAt = 0;
+  anims = []; rebuildAnimSet(); flips = [];
+  portalStop(); portalHappy();
+  snd("win");
+  var newRec = false;
+  S.wins++;
+  var bs = G.mode === 1 ? S.bs1 : S.bs3, bt = G.mode === 1 ? S.bt1 : S.bt3;
+  if (G.score > bs) { if (G.mode === 1) S.bs1 = G.score; else S.bs3 = G.score; newRec = true; }
+  var secs = Math.floor(G.elapsed);
+  if (!bt || secs < bt) { if (G.mode === 1) S.bt1 = secs; else S.bt3 = secs; newRec = true; }
+  saveStats();
+  var queue = [], r, f;
+  for (r = 13; r >= 1; r--) for (f = 0; f < 4; f++) queue.push({ fi: f, r: r });
+  wf = { queue: queue, nextAt: performance.now() + 350, parts: [], newRec: newRec };
+  wfActive = true;
+}
+function stepWaterfall(dt) {
+  var t = performance.now(), i;
+  if (wf.queue.length && t >= wf.nextAt) {
+    var it = wf.queue.shift();
+    var card = G.found[it.fi].pop();
+    if (card) {
+      wf.parts.push({
+        card: card,
+        x: colX(3 + it.fi), y: M.topY,
+        vx: (60 + Math.random() * 150) * (Math.random() < 0.5 ? -1 : 1),
+        vy: -60 - Math.random() * 160
+      });
+    }
+    wf.nextAt = t + 90;
+  }
+  for (i = wf.parts.length - 1; i >= 0; i--) {
+    var p = wf.parts[i];
+    p.vy += 1100 * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.y > H - M.ch) { p.y = H - M.ch; p.vy *= -0.78; }
+    if (p.x < -M.cw - 20 || p.x > W + M.cw + 20) wf.parts.splice(i, 1);
+  }
+  if (!wf.queue.length && !wf.parts.length) {
+    wfActive = false;
+    showWinPanel();
+  }
+}
+function drawWaterfall() {
+  for (var i = 0; i < wf.parts.length; i++) {
+    var p = wf.parts[i];
+    drawFace(p.x, p.y, p.card, M.cw, M.ch);
+  }
+}
+
+// ---------- 渲染 ----------
+function render(now) {
+  var bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#2c7a4b"); bg.addColorStop(1, "#1d5a36");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  var vg = ctx.createRadialGradient(W / 2, H * 0.4, Math.min(W, H) * 0.3, W / 2, H * 0.5, Math.max(W, H) * 0.78);
+  vg.addColorStop(0, "rgba(255,255,255,.05)"); vg.addColorStop(1, "rgba(0,0,0,.24)");
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  if (!G) return;
+  LM = layoutMap();
+  var i, j;
+  drawSlot(colX(0), M.topY, "");
+  if (!G.stock.length) drawRecycle(colX(0), M.topY);
+  drawSlot(colX(1), M.topY, "");
+  for (i = 0; i < 4; i++) drawSlot(colX(3 + i), M.topY, G.found[i].length ? "" : "A");
+  for (i = 0; i < 7; i++) if (!G.tab[i].length) drawSlot(colX(i), M.tabY, "K");
+  if (G.stock.length) {
+    drawCard(colX(0), M.topY, G.stock[G.stock.length - 1], M.cw, M.ch);
+    drawCount(colX(0), M.topY, G.stock.length);
+  }
+  for (i = 0; i < G.waste.length; i++) {
+    var wc = G.waste[i];
+    if (animSet[wc.id] || wc._hide) continue;
+    var wp = LM[wc.id];
+    drawCard(wp.x, wp.y, wc, M.cw, M.ch);
+  }
+  for (i = 0; i < 4; i++) {
+    var ft = topCard(G.found[i]);
+    if (ft && !animSet[ft.id]) drawCard(LM[ft.id].x, LM[ft.id].y, ft, M.cw, M.ch);
+  }
+  for (i = 0; i < 7; i++) {
+    var p = G.tab[i];
+    for (j = 0; j < p.length; j++) {
+      var c = p[j];
+      if (c._hide || animSet[c.id]) continue;
+      if (drag && drag.set[c.id]) continue;
+      var cp = LM[c.id];
+      drawCard(cp.x, cp.y, c, M.cw, M.ch);
+    }
+  }
+  // 点选高亮
+  if (sel) outlineSel("#ffe28a");
+  // 提示脉冲
+  if (hintBoxes && now < hintUntil) {
+    var pulse = 0.4 + 0.4 * Math.sin(now / 130);
+    ctx.strokeStyle = "rgba(255,215,106," + pulse.toFixed(3) + ")";
+    ctx.lineWidth = 3;
+    for (i = 0; i < hintBoxes.length; i++) {
+      var hb = hintBoxes[i];
+      rrect(ctx, hb.x - 3, hb.y - 3, M.cw + 6, M.ch + 6, M.cw * 0.11); ctx.stroke();
+    }
+  }
+  // 拖拽落点高亮
+  if (drag && drag.target) {
+    ctx.strokeStyle = "rgba(140,255,170,.9)"; ctx.lineWidth = 3;
+    var tb = targetBox(drag.target);
+    if (tb) { rrect(ctx, tb.x - 3, tb.y - 3, M.cw + 6, M.ch + 6, M.cw * 0.11); ctx.stroke(); }
+  }
+  // 飞行动画中的牌
+  for (i = 0; i < anims.length; i++) {
+    var an = anims[i];
+    if (an.t < 0) continue;
+    var e = easeOut(Math.min(1, an.t / an.dur));
+    var x = an.x0 + (an.x1 - an.x0) * e;
+    var y = an.y0 + (an.y1 - an.y0) * e - Math.sin(Math.PI * e) * 18;
+    drawCard(x, y, an.card, M.cw, M.ch);
+  }
+  // 拖拽跟随
+  if (drag) {
+    for (i = 0; i < drag.cards.length; i++) {
+      drawCard(drag.x - drag.gx, drag.y - drag.gy + i * M.uOff * 0.85, drag.cards[i], M.cw, M.ch);
+    }
+  }
+  if (now < msgUntil) {
+    ctx.fillStyle = "rgba(8,22,13,.8)";
+    var tw = ctx.measureText(msgText).width;
+    ctx.font = "700 14px " + FONT;
+    var bw = Math.max(140, ctx.measureText(msgText).width + 36);
+    rrect(ctx, W / 2 - bw / 2, M.topY + M.ch + 6, bw, 30, 15); ctx.fill();
+    ctx.fillStyle = "#ffe9a8";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(msgText, W / 2, M.topY + M.ch + 21);
+    void tw;
+  }
+}
+function outlineSel(color) {
+  var cards = selCards();
+  if (!cards) return;
+  ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+  for (var i = 0; i < cards.length; i++) {
+    var p = LM[cards[i].id];
+    if (!p) continue;
+    rrect(ctx, p.x - 2, p.y - 2, M.cw + 4, M.ch + 4, M.cw * 0.11); ctx.stroke();
+  }
+}
+function selCards() {
+  if (!sel) return null;
+  if (sel.k === "t" && sel.j >= 0) return G.tab[sel.fi].slice(sel.j);
+  if (sel.k === "w" && sel.j >= 0) return [G.waste[sel.j]];
+  if (sel.k === "f" && sel.j >= 0) return [G.found[sel.fi][sel.j]];
+  return null;
+}
+function targetBox(tg) {
+  if (!tg) return null;
+  if (tg.k === "f") return { x: colX(3 + tg.fi), y: M.topY };
+  var p = G.tab[tg.fi];
+  if (p.length) { var t = LM[topCard(p).id]; return { x: colX(tg.fi), y: t.y }; }
+  return { x: colX(tg.fi), y: M.tabY };
+}
+
+// ---------- 主循环 ----------
+function frame(t) {
+  var dt = Math.min((t - lastT) / 1000, 0.05);
+  lastT = t;
+  if (state === "PLAY") {
+    if (!document.hidden) tickTime(G, dt);
+    stepAuto(t);
+    checkStuckTimer(t);
+  }
+  if (winAt && t >= winAt) { winAt = 0; beginWin(); }
+  stepAnims(dt);
+  if (state === "WIN" && wfActive) {
+    stepWaterfall(dt);
+    if (wfActive) drawWaterfall();
+    else render(t);
+  } else {
+    render(t);
+  }
+  updateHud();
+  requestAnimationFrame(frame);
+}
+
+// ---------- HUD ----------
+var elScore = document.getElementById("score");
+var elTime = document.getElementById("time");
+var elMoves = document.getElementById("moves");
+var undoBtn = document.getElementById("undoBtn");
+var hintBtn = document.getElementById("hintBtn");
+var muteBtn = document.getElementById("muteBtn");
+var newBtn = document.getElementById("newBtn");
+var lastHud = "";
+function updateHud() {
+  if (!G) return;
+  var secs = Math.floor(G.elapsed);
+  var key = G.score + "|" + secs + "|" + G.moves + "|" + undoStack.length + "|" + hintsLeft + "|" + muted;
+  if (key === lastHud) return;
+  lastHud = key;
+  elScore.textContent = G.score;
+  elTime.textContent = fmtTime(secs);
+  elMoves.textContent = G.moves;
+  undoBtn.disabled = !undoStack.length;
+  hintBtn.textContent = "Hint (" + hintsLeft + ")";
+  hintBtn.disabled = hintsLeft <= 0 || state !== "PLAY";
+  muteBtn.textContent = muted ? "Sound Off" : "Sound On";
+}
+function fmtTime(s) {
+  var m = Math.floor(s / 60), r = s % 60;
+  return m + ":" + (r < 10 ? "0" : "") + r;
+}
+undoBtn.addEventListener("click", function () { ensureAudio(); doUndo(); });
+muteBtn.addEventListener("click", function () {
+  muted = !muted;
+  try { localStorage.setItem("sk_mute", muted ? "1" : "0"); } catch (e) {}
+  updateHudForce();
+  if (!muted) { ensureAudio(); snd("move"); }
+});
+newBtn.addEventListener("click", function () { ensureAudio(); showMenu(); });
+function updateHudForce() { lastHud = ""; updateHud(); }
+
+// ---------- 提示 ----------
+function hintScore(m) {
+  if (m.t === "f") return 100;
+  if (m.f === "w") return 60;
+  var j = G.tab[m.fi].length - m.n;
+  if (j > 0) return 80;                                   // 能翻开暗牌
+  if (G.tab[m.ti].length === 0) return 70;                // K 上空列
+  return 40;
+}
+function useHint() {
+  if (state !== "PLAY" || hintsLeft <= 0) return;
+  var ms = findMoves(G, false);
+  hintsLeft--;
+  updateHudForce();
+  if (!ms.length) { flashMsg("Try drawing from the stock"); return; }
+  ms.sort(function (a, b) { return hintScore(b) - hintScore(a); });
+  var m = ms[0], boxes = [], i;
+  if (m.f === "t") {
+    var p = G.tab[m.fi];
+    for (i = p.length - m.n; i < p.length; i++) boxes.push({ x: colX(m.fi), y: LM[p[i].id].y });
+  } else if (m.f === "w") {
+    var wt = topCard(G.waste);
+    boxes.push({ x: LM[wt.id].x, y: M.topY });
+  }
+  boxes.push(targetBox({ k: m.t, fi: m.ti }));
+  hintBoxes = boxes;
+  hintUntil = performance.now() + 1900;
+  snd("flip");
+}
+
+// ---------- 命中检测 ----------
+function hitTest(x, y, loose) {
+  var ex = loose ? Math.max(8, M.gap) : 3;
+  if (y >= M.topY - ex && y <= M.topY + M.ch + ex) {
+    if (x >= colX(0) - ex && x <= colX(0) + M.cw + ex) return { k: "stock", fi: 0, j: -1 };
+    if (x >= colX(1) - ex && x <= colX(1) + M.cw * 1.9 + ex) return { k: "waste", fi: 0, j: G.waste.length - 1 };
+    var fi2 = Math.round((x - M.pad - M.cw / 2) / (M.cw + M.gap));
+    if (fi2 >= 3 && fi2 <= 6) return { k: "f", fi: fi2 - 3, j: G.found[fi2 - 3].length - 1 };
+    return null;
+  }
+  if (y >= M.tabY - ex) {
+    var c2 = Math.round((x - M.pad - M.cw / 2) / (M.cw + M.gap));
+    if (c2 < 0 || c2 > 6) return null;
+    var p = G.tab[c2];
+    if (!p.length) return { k: "t", fi: c2, j: -1 };
+    for (var j = p.length - 1; j >= 0; j--) {
+      var cp = LM[p[j].id] || { y: M.tabY };
+      var nextY = j < p.length - 1 ? (LM[p[j + 1].id] ? LM[p[j + 1].id].y : cp.y + M.ch) : cp.y + M.ch + ex * 2;
+      if (y >= cp.y - ex * 0.6 && y < nextY + ex * 0.6) return { k: "t", fi: c2, j: j };
+    }
+    return { k: "t", fi: c2, j: p.length - 1 };
+  }
+  return null;
+}
+function movableHit(h) {
+  if (!h) return false;
+  if (h.k === "w") return h.j >= 0 && h.j === G.waste.length - 1;
+  if (h.k === "t") return h.j >= 0 && G.tab[h.fi][h.j].up;
+  if (h.k === "f") return h.j >= 0;
+  return false;
+}
+
+// ---------- 输入 ----------
+function evtPos(e) {
+  var rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (W / rect.width),
+    y: (e.clientY - rect.top) * (H / rect.height)
+  };
+}
+function sameHit(a, b) {
+  return a && b && a.k === b.k && a.fi === b.fi && a.j === b.j;
+}
+function pointerDown(p) {
+  if (state === "WIN" && wfActive) { wf.queue = []; wf.parts = []; return; }
+  if (state !== "PLAY") return;
+  var h = hitTest(p.x, p.y, false);
+  if (h && h.k === "stock") { doDrawAction(); return; }
+  if (movableHit(h)) pendingTap = { h: h, x: p.x, y: p.y };
+  else { sel = null; }
+}
+function pointerMove(p) {
+  if (!pendingTap || state !== "PLAY") return;
+  if (!drag && Math.abs(p.x - pendingTap.x) + Math.abs(p.y - pendingTap.y) > 7) startDrag(p);
+  if (drag) {
+    drag.x = p.x; drag.y = p.y;
+    var tg = hitTest(p.x, p.y, true);
+    if (tg && (tg.k === "f" || tg.k === "t")) {
+      var mv = { f: drag.from.k, fi: drag.from.fi, n: drag.cards.length, t: tg.k, ti: tg.fi };
+      drag.target = canMove(G, mv) ? { k: tg.k, fi: tg.fi } : null;
+    } else drag.target = null;
+  }
+}
+function pointerUp() {
+  if (drag) { finishDrag(); return; }
+  if (!pendingTap || state !== "PLAY") { pendingTap = null; return; }
+  var h = pendingTap.h;
+  pendingTap = null;
+  var now = performance.now();
+  var dbl = (now - lastTap.t < 500) && lastTap.k === h.k && lastTap.i === h.fi && lastTap.j === h.j;
+  lastTap = { t: now, k: h.k, i: h.fi, j: h.j };
+  if (dbl) { lastDblAt = now; tryAutoFound(h); return; }
+  if (sel && !sameHit(sel, h)) { if (tryMoveSel(h)) return; }
+  if (movableHit(h)) { sel = h; snd("draw"); }
+  else sel = null;
+}
+// 桌面原生 dblclick 兜底（与手动双击检测互斥，防重复触发）
+var lastDblAt = 0;
+canvas.addEventListener("dblclick", function (e) {
+  e.preventDefault();
+  if (state !== "PLAY") return;
+  if (performance.now() - lastDblAt < 150) return;
+  var p = evtPos(e);
+  var h = hitTest(p.x, p.y, false);
+  if (h) tryAutoFound(h);
+});
+function startDrag(p) {
+  var h = pendingTap.h;
+  var cards = selCards2(h);
+  if (!cards) return;
+  var first = LM[cards[0].id];
+  var set = {};
+  for (var i = 0; i < cards.length; i++) set[cards[i].id] = true;
+  drag = { cards: cards, from: h, gx: p.x - first.x, gy: p.y - first.y, x: p.x, y: p.y, set: set, target: null };
+  sel = null;
+}
+function selCards2(h) {
+  if (h.k === "t") return G.tab[h.fi].slice(h.j);
+  if (h.k === "w") return [G.waste[h.j]];
+  if (h.k === "f") return [G.found[h.fi][h.j]];
+  return null;
+}
+function finishDrag() {
+  var d = drag; drag = null;
+  if (d.target) {
+    var mv = { f: d.from.k, fi: d.from.fi, n: d.cards.length, t: d.target.k, ti: d.target.fi };
+    var pos = [];
+    for (var i = 0; i < d.cards.length; i++) pos.push({ x: d.x - d.gx, y: d.y - d.gy + i * M.uOff * 0.85 });
+    beginUserMove(mv, pos, false);
+  } else {
+    // 无效落点：弹回原位
+    for (var j = 0; j < d.cards.length; j++) {
+      var b = LM[d.cards[j].id];
+      anims.push({ card: d.cards[j], x0: d.x - d.gx, y0: d.y - d.gy + j * M.uOff * 0.85, x1: b.x, y1: b.y, t: -j * 0.02, dur: 0.2 });
+    }
+    snd("error");
+  }
+}
+function tryMoveSel(dest) {
+  if (dest.k !== "t" && dest.k !== "f") return false;
+  var n = 1;
+  if (sel.k === "t") n = G.tab[sel.fi].length - sel.j;
+  var mv = { f: sel.k, fi: sel.fi, n: n, t: dest.k, ti: dest.fi };
+  if (!canMove(G, mv)) { snd("error"); return false; }   // 失败则落到重选逻辑
+  return beginUserMove(mv, null, false);
+}
+function tryAutoFound(h) {
+  if (h.k === "f") return;
+  var card = h.k === "t" ? G.tab[h.fi][h.j] : G.waste[h.j];
+  var isTop = h.k === "t" ? h.j === G.tab[h.fi].length - 1 : h.j === G.waste.length - 1;
+  if (!isTop) { snd("error"); return; }
+  for (var fi = 0; fi < 4; fi++) {
+    var mv = { f: h.k, fi: h.fi, n: 1, t: "f", ti: fi };
+    if (canMove(G, mv)) { beginUserMove(mv, null, false); return; }
+  }
+  snd("error");
+}
+canvas.addEventListener("mousedown", function (e) { ensureAudio(); pointerDown(evtPos(e)); });
+canvas.addEventListener("mousemove", function (e) { pointerMove(evtPos(e)); });
+window.addEventListener("mouseup", function () { pointerUp(); });
+canvas.addEventListener("touchstart", function (e) {
+  e.preventDefault(); ensureAudio();
+  pointerDown(evtPos(e.changedTouches[0]));
+}, { passive: false });
+canvas.addEventListener("touchmove", function (e) {
+  e.preventDefault();
+  pointerMove(evtPos(e.changedTouches[0]));
+}, { passive: false });
+canvas.addEventListener("touchend", function (e) { e.preventDefault(); pointerUp(); }, { passive: false });
+canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+document.addEventListener("keydown", function (e) {
+  if (e.key === "n" || e.key === "N") showMenu();
+  else if (e.key === "u" || e.key === "U") doUndo();
+  else if (e.key === "h" || e.key === "H") useHint();
+  else if (e.key === "m" || e.key === "M") muteBtn.click();
+});
+hintBtn.addEventListener("click", function () { ensureAudio(); useHint(); });
+
+// ---------- 界面面板 ----------
+var overlay = document.getElementById("overlay");
+var ovTitle = document.getElementById("ovTitle");
+var ovText = document.getElementById("ovText");
+var ovFinal = document.getElementById("ovFinal");
+var ovRec = document.getElementById("ovRec");
+var ovBtns = document.getElementById("ovBtns");
+function hideOverlay() { overlay.style.display = "none"; }
+function showOverlay() { overlay.style.display = "flex"; }
+function clearBtns() { ovBtns.innerHTML = ""; }
+function addBtn(label, alt, fn) {
+  var b = document.createElement("button");
+  b.textContent = label;
+  if (alt) b.className = "alt";
+  b.addEventListener("click", function (e) { e.stopPropagation(); ensureAudio(); fn(); });
+  ovBtns.appendChild(b);
+}
+function fmtRecLine(mode) {
+  var bs = mode === 1 ? S.bs1 : S.bs3;
+  var bt = mode === 1 ? S.bt1 : S.bt3;
+  return "Draw " + mode + " — Best " + (bs ? bs : "—") + (bt ? " · Fastest " + fmtTime(bt) : " · Fastest —");
+}
+function showMenu() {
+  state = "MENU";
+  wfActive = false; wf = null;
+  ovTitle.textContent = "Solitaire";
+  ovText.innerHTML = "Classic Klondike — move all 52 cards onto the four foundations.<br>Drag or tap to move · double-tap sends a card to its foundation.";
+  ovFinal.style.display = "none";
+  ovRec.innerHTML = fmtRecLine(1) + "<br>" + fmtRecLine(3) + "<br>Wins: " + S.wins + " · Games: " + S.games;
+  clearBtns();
+  addBtn("Play Draw 1 (Easy)", false, function () { startGame(1); });
+  addBtn("Play Draw 3 (Classic)", false, function () { startGame(3); });
+  showOverlay();
+  updateHudForce();
+}
+function showWinPanel() {
+  ovTitle.textContent = "You Win!";
+  ovFinal.style.display = "block";
+  ovFinal.textContent = G.score;
+  ovText.innerHTML = "Time " + fmtTime(Math.floor(G.elapsed)) + " · Moves " + G.moves + (wf.newRec ? "<br>New record!" : "");
+  ovRec.innerHTML = fmtRecLine(1) + "<br>" + fmtRecLine(3);
+  clearBtns();
+  addBtn("Play Again", false, function () { startGame(G.mode); });
+  addBtn("Menu", true, showMenu);
+  showOverlay();
+  updateHudForce();
+}
+function showStuck() {
+  state = "STUCK";
+  portalStop();
+  snd("error");
+  ovTitle.textContent = "No More Moves";
+  ovFinal.style.display = "none";
+  ovText.innerHTML = "Nothing can be played or drawn.<br>Score " + G.score + " · Moves " + G.moves;
+  ovRec.innerHTML = "";
+  clearBtns();
+  addBtn("Undo Last Move", true, function () { doUndo(); });
+  addBtn("New Game", false, showMenu);
+  showOverlay();
+  updateHudForce();
+}
+
+// ---------- 开局 ----------
+function startGame(mode) {
+  G = deal(mode);
+  undoStack = [];
+  anims = []; rebuildAnimSet();
+  flips = [];
+  hintsLeft = 3;
+  hintBoxes = null;
+  sel = null; drag = null; pendingTap = null;
+  autoPending = false; stuckAt = 0; winAt = 0;
+  wf = null; wfActive = false;
+  roundStarted = false;
+  state = "PLAY";
+  hideOverlay();
+  S.games++;
+  saveStats();
+  updateHudForce();
+  // 发牌动画：按行扫描顺序从牌堆飞出，顶牌落地后翻开
+  var lm = layoutMap();
+  var idx = 0, r, c;
+  for (r = 0; r < 7; r++) {
+    for (c = r; c < 7; c++) {
+      var card = G.tab[c][r];
+      card._hide = true;
+      var tp = lm[card.id];
+      anims.push({ card: card, x0: colX(0), y0: M.topY, x1: tp.x, y1: tp.y, t: -idx * 0.03, dur: 0.17 });
+      idx++;
+    }
+  }
+  for (c = 0; c < 7; c++) {
+    var top = topCard(G.tab[c]);
+    top._flip = 1;
+    top._flipDelay = 0.25 + c * 0.05;
+    flips.push(top);
+  }
+  snd("deal");
+}
+
+// ---------- 启动 ----------
+resize();
+showMenu();
+requestAnimationFrame(frame);
+window.__sk = {
+  get G() { return G; },
+  get state() { return state; },
+  get hints() { return hintsLeft; },
+  get M() { return M; },
+  get LM() { return LM; },
+  colX: colX,
+  logic: { canMove: canMove, findMoves: findMoves, isStuck: isStuck, checkWin: checkWin }
+};
+</script>
+</body>
+</html>
